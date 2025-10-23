@@ -35,6 +35,9 @@ export default function AdaBoostPage() {
   const { data, domain } = useDomain();
   const [step, setStep] = useState<number>(0);
   const [playing, setPlaying] = useState(false);
+  const [prevCount, setPrevCount] = useState<number>(1);
+  const [prevOpacity, setPrevOpacity] = useState<number>(0.35);
+  const [prevRadius, setPrevRadius] = useState<number>(4);
 
   // auto pick two numeric features and target
   const { xKey, yKey, labelKey } = useMemo(() => {
@@ -76,6 +79,20 @@ export default function AdaBoostPage() {
     if (!points.length) return 0;
     const xs = points.map((p) => p.x).sort((a, b) => a - b);
     return xs[Math.floor(xs.length / 2)];
+  }, [points]);
+
+  // compute axis domains (with small padding) so XAxis/YAxis render numeric ticks correctly
+  const axisDomains = useMemo(() => {
+    if (!points || points.length === 0) return { x: [0, 1], y: [0, 1] };
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+    const xMin = Math.min(...xs);
+    const xMax = Math.max(...xs);
+    const yMin = Math.min(...ys);
+    const yMax = Math.max(...ys);
+    const xPad = (xMax - xMin) * 0.06 || 1;
+    const yPad = (yMax - yMin) * 0.06 || 1;
+    return { x: [Math.floor(xMin - xPad), Math.ceil(xMax + xPad)], y: [Math.floor(yMin - yPad), Math.ceil(yMax + yPad)] };
   }, [points]);
 
   // determine "hard" points incorrectly classified by naive split
@@ -168,11 +185,11 @@ export default function AdaBoostPage() {
   const boundaryRight = medianX + (medianX * 0.02 || 1);
 
   return (
-    <main className="min-h-screen flex flex-col">
+    <main className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900 text-gray-100">
       <Navbar />
-      <section className="max-w-6xl mx-auto p-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">AdaBoost — Visual Explanation</h1>
-        <p className="text-gray-600 mb-6">
+      <section className="max-w-6xl mx-auto p-6 flex-grow">
+        <h1 className="text-3xl font-bold text-cyan-400 mb-2">AdaBoost — Visual Explanation</h1>
+        <p className="text-gray-400 mb-6">
           AdaBoost increases the importance of samples that were previously misclassified. We visualize weights as point sizes.
         </p>
 
@@ -186,34 +203,71 @@ export default function AdaBoostPage() {
                 : "Final ensemble combines learners and reduces errors (visualized as most points returning to normal size)."
             } />
 
-            <div className="bg-white p-4 rounded shadow">
+            <div className="bg-gray-900 p-4 rounded-xl shadow-lg border border-gray-700">
               <div className="flex gap-2 items-center">
-                <button onClick={() => setStep((s) => Math.max(0, s - 1))} className="px-3 py-1 border rounded">Prev</button>
-                <button onClick={() => setPlaying(true)} className="px-3 py-1 bg-indigo-600 text-white rounded">Play</button>
-                <button onClick={() => setStep((s) => Math.min(MAX_STEPS - 1, s + 1))} className="px-3 py-1 border rounded">Next</button>
-                <button onClick={reset} className="ml-auto px-3 py-1 border rounded">Reset</button>
+                <button onClick={() => setStep((s) => Math.max(0, s - 1))} className="px-3 py-1 bg-gray-700 rounded text-white">⬅ Prev</button>
+                <button onClick={() => setPlaying(true)} className="px-3 py-1 bg-indigo-600 text-white rounded">▶ Play</button>
+                <button onClick={() => setStep((s) => Math.min(MAX_STEPS - 1, s + 1))} className="px-3 py-1 bg-gray-700 rounded text-white">Next ➡</button>
+                <button onClick={reset} className="ml-auto px-3 py-1 bg-gray-700 rounded text-white">🔄 Reset</button>
               </div>
 
-              <div className="mt-3 text-sm text-gray-500">
-                <div>Domain: <strong>{domain}</strong></div>
-                <div>Features: <strong>{xKey}</strong> vs <strong>{yKey}</strong></div>
+              <div className="mt-3 text-sm text-gray-400">
+                <div>Domain: <strong className="text-gray-200">{domain}</strong></div>
+                <div>Features: <strong className="text-gray-200">{xKey}</strong> vs <strong className="text-gray-200">{yKey}</strong></div>
                 <div className="mt-2">Naive split at x = {medianX.toFixed(2)}</div>
               </div>
             </div>
           </div>
 
-          <div className="md:col-span-2 bg-white rounded shadow p-4">
+          <div className="md:col-span-2 bg-gray-900 rounded-xl shadow-lg border border-gray-700 p-4">
             <div style={{ width: "100%", height: 480 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart>
-                  <CartesianGrid />
-                  <XAxis dataKey="x" name={xKey} />
-                  <YAxis dataKey="y" name={yKey} />
+                  <CartesianGrid stroke="#374151" />
+                  <XAxis
+                    dataKey="x"
+                    name={xKey}
+                    stroke="#9ca3af"
+                    type="number"
+                    domain={axisDomains.x}
+                    tickFormatter={(v: any) => Number(v).toFixed(0)}
+                    label={{ value: xKey, position: "insideBottom", offset: -8, fill: "#9ca3af" }}
+                  />
+                  <YAxis
+                    dataKey="y"
+                    name={yKey}
+                    stroke="#9ca3af"
+                    type="number"
+                    domain={axisDomains.y}
+                    tickFormatter={(v: any) => Number(v).toFixed(0)}
+                    label={{ value: yKey, angle: -90, position: "insideLeft", offset: 0, fill: "#9ca3af" }}
+                  />
                   <Tooltip formatter={(value: any, name: any, props: any) => {
                     if (name === "x") return [`${value}`,'x'];
                     if (name === "y") return [`${value}`,'y'];
                     return value;
                   }} />
+
+                  {/* render previous steps faintly */}
+                  {states.map((s, si) => {
+                    if (si >= step) return null;
+                    const startIndex = Math.max(0, step - prevCount);
+                    if (si < startIndex) return null;
+                    return (
+                      <Scatter
+                        key={`prev-${si}`}
+                        name={`step ${si + 1} (prev)`}
+                        data={s.map((p) => ({ ...p, x: p.x, y: p.y }))}
+                        fill="#9CA3AF"
+                        opacity={prevOpacity}
+                        shape={(props: any) => {
+                          const { cx, cy } = props;
+                          return <circle cx={cx} cy={cy} r={prevRadius} fill="#9CA3AF" opacity={prevOpacity} stroke="#6B7280" strokeWidth={0.6} />;
+                        }}
+                      />
+                    );
+                  })}
+
                   <Scatter
                     name="points"
                     data={displayData(states[step] ?? [])}
@@ -232,6 +286,23 @@ export default function AdaBoostPage() {
                   />
                 </ScatterChart>
               </ResponsiveContainer>
+            </div>
+
+            <div className="mt-4 border-t border-gray-700 pt-3">
+              <h4 className="text-sm font-medium text-gray-300 mb-2">Previous steps display</h4>
+              <div className="text-xs text-gray-400 mb-2">Number of previous steps to show (0 = none)</div>
+              <input type="range" min={0} max={Math.max(0, states.length - 1)} value={prevCount} onChange={(e) => setPrevCount(Number(e.target.value))} className="w-full" />
+              <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                <div className="flex-1">
+                  <div>Opacity</div>
+                  <input type="range" min={0.05} max={0.8} step={0.05} value={prevOpacity} onChange={(e) => setPrevOpacity(Number(e.target.value))} className="w-full" />
+                </div>
+                <div className="w-24">
+                  <div>Size</div>
+                  <input type="range" min={2} max={10} step={1} value={prevRadius} onChange={(e) => setPrevRadius(Number(e.target.value))} className="w-full" />
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-gray-400">Showing last <strong className="text-gray-200">{prevCount}</strong> previous steps with opacity <strong className="text-gray-200">{prevOpacity}</strong> and radius <strong className="text-gray-200">{prevRadius}</strong>.</div>
             </div>
 
             {/* Visual boundary overlay explanation */}

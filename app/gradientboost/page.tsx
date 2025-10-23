@@ -40,6 +40,9 @@ export default function GradientBoostPage() {
   const { data, domain } = useDomain();
   const [step, setStep] = useState<number>(0);
   const [playing, setPlaying] = useState(false);
+  const [prevCount, setPrevCount] = useState<number>(1);
+  const [prevOpacity, setPrevOpacity] = useState<number>(0.35);
+  const [prevRadius, setPrevRadius] = useState<number>(4);
 
   // pick features
   const { xKey, yKey, labelKey } = useMemo(() => {
@@ -67,11 +70,25 @@ export default function GradientBoostPage() {
       const xVal = Number(d[xKey]) || 0;
       const maxX = Math.max(...(data as any[]).map((z) => Number(z[xKey] || 1)));
       const xnorm = xVal / (maxX || 1);
-      // base prediction is noisy around xnorm
-      const basePred = Math.min(0.95, Math.max(0.05, xnorm * 0.7 + (Math.random() - 0.5) * 0.2));
+  // base prediction is noisy around xnorm (use smaller noise for stability)
+  const basePred = Math.min(0.95, Math.max(0.05, xnorm * 0.7 + (Math.random() - 0.5) * 0.05));
       return { id: i, x: Number(d[xKey]) || 0, y: Number(d[yKey]) || 0, target, pred: basePred } as GPoint;
     });
   }, [data, xKey, yKey, labelKey]);
+
+  // compute axis domains (with small padding) so XAxis/YAxis render numeric ticks correctly
+  const axisDomains = useMemo(() => {
+    if (!basePoints || basePoints.length === 0) return { x: [0, 1], y: [0, 1] };
+    const xs = basePoints.map((p) => p.x);
+    const ys = basePoints.map((p) => p.y);
+    const xMin = Math.min(...xs);
+    const xMax = Math.max(...xs);
+    const yMin = Math.min(...ys);
+    const yMax = Math.max(...ys);
+    const xPad = (xMax - xMin) * 0.06 || 1;
+    const yPad = (yMax - yMin) * 0.06 || 1;
+    return { x: [Math.floor(xMin - xPad), Math.ceil(xMax + xPad)], y: [Math.floor(yMin - yPad), Math.ceil(yMax + yPad)] };
+  }, [basePoints]);
 
   // build sequence of predictions where each step reduces residuals (we simulate learning)
   // states.series: array of arrays of GPoint (snapshots for step 0..MAX_STEPS-1)
@@ -96,10 +113,11 @@ export default function GradientBoostPage() {
       // next step: simulate a learner that reduces residuals by a factor
       current = current.map((p) => {
         const res = p.target - p.pred;
-        // learning rate / correction factor
-        const lr = 0.45 * Math.pow(0.7, s); // decreasing corrections over steps
-        // new prediction nudged towards target
-        const newPred = Math.min(0.99, Math.max(0.01, p.pred + res * lr + (Math.random() - 0.5) * 0.02));
+        // learning rate / correction factor — smaller and slower decay to spread corrections across steps
+        const lr = 0.25 * Math.pow(0.75, s);
+        // new prediction nudged towards target with reduced jitter
+        const jitter = (Math.random() - 0.5) * 0.01;
+        const newPred = Math.min(0.99, Math.max(0.01, p.pred + res * lr + jitter));
         return { ...p, pred: newPred };
       });
     }
@@ -179,9 +197,12 @@ export default function GradientBoostPage() {
   const lossDelta = lossNow != null && lossPrev != null ? Number((lossPrev - lossNow).toFixed(4)) : null;
   const accNow = lossSeries[step]?.accuracy ?? null;
 
+  // (removed custom legend payload to avoid type mismatch with Recharts)
+
   // custom shape for current points: draw arrow from prev position -> current position and show circle
   const PointWithArrow = (props: any) => {
     const { cx, cy, payload } = props;
+    const forcedColor = (props as any).forcedColor as string | undefined;
     // We cannot get prev screen coords directly, but payload.prevX/prevY are feature coords.
     // Recharts gives us cx/cy for the current point; to draw a visible directional line
     // we'll render a short line pointing in vertical/horizontal direction between hypothetical prev and current.
@@ -193,11 +214,11 @@ export default function GradientBoostPage() {
     const diff = pred - prevPred; // positive => moved toward 1
     const moved = Math.abs(diff);
 
-    // arrow length scaled by pred difference
-    const arrowLen = Math.min(20, Math.max(4, moved * 100));
+  // arrow length scaled by pred difference (amplified so small moves are visible)
+  const arrowLen = Math.min(30, Math.max(3, moved * 400));
 
     // choose color by correctness
-    const color = payload.correct ? "#10B981" : "#EF4444";
+  const color = forcedColor ?? (payload.correct ? "#10B981" : "#EF4444");
     const r = payload.correct ? 5 : 7;
 
     // direction: if pred increased, arrow points upward; if decreased, arrow points downward
@@ -240,11 +261,11 @@ export default function GradientBoostPage() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col">
+    <main className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900 text-gray-100">
       <Navbar />
-      <section className="max-w-6xl mx-auto p-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Gradient Boosting — Visual Explanation (step-by-step)</h1>
-        <p className="text-gray-600 mb-6">
+      <section className="max-w-6xl mx-auto p-6 flex-grow">
+        <h1 className="text-3xl font-bold text-cyan-400 mb-2">Gradient Boosting — Visual Explanation (step-by-step)</h1>
+        <p className="text-gray-400 mb-6">
           Gradient Boosting sequentially fits models to remaining residuals. Use the controls to step through iterations — previous predictions are shown faintly; arrows show how each prediction moved.
         </p>
 
@@ -260,87 +281,145 @@ export default function GradientBoostPage() {
                     : "Final model has much smaller residuals and higher accuracy."
               }
             />
-
-            <div className="bg-white p-4 rounded shadow">
+            <div className="bg-gray-900 p-4 rounded-xl shadow-lg border border-gray-700">
               <div className="flex gap-2 items-center">
                 <button
                   onClick={() => setStep((s) => Math.max(0, s - 1))}
-                  className="px-3 py-1 border rounded"
+                  className="px-3 py-1 bg-gray-700 rounded text-white"
                   disabled={step === 0}
                 >
-                  Prev
+                  ⬅ Prev
                 </button>
 
                 <button
                   onClick={() => setPlaying((p) => !p)}
-                  className={`px-3 py-1 text-white rounded ${playing ? "bg-yellow-500" : "bg-green-600"}`}
+                  className={`px-3 py-1 text-white rounded ${playing ? "bg-yellow-500" : "bg-indigo-600"}`}
                 >
-                  {playing ? "Pause" : "Play"}
+                  {playing ? "⏸ Pause" : "▶ Play"}
                 </button>
 
                 <button
                   onClick={() => setStep((s) => Math.min((states.series?.length ?? MAX_STEPS) - 1, s + 1))}
-                  className="px-3 py-1 border rounded"
+                  className="px-3 py-1 bg-gray-700 rounded text-white"
                   disabled={step >= (states.series?.length ?? MAX_STEPS) - 1}
                 >
-                  Next
+                  Next ➡
                 </button>
 
-                <button onClick={reset} className="ml-auto px-3 py-1 border rounded">Reset</button>
+                <button onClick={reset} className="ml-auto px-3 py-1 bg-gray-700 rounded text-white">🔄 Reset</button>
               </div>
 
-              <div className="mt-3 text-xs text-gray-500">
-                <div>Domain: <strong>{domain}</strong></div>
-                <div>Features: <strong>{xKey}</strong> vs <strong>{yKey}</strong></div>
+                  <div className="mt-3 text-xs text-gray-400">
+                <div>Domain: <strong className="text-gray-200">{domain}</strong></div>
+                <div>Features: <strong className="text-gray-200">{xKey}</strong> vs <strong className="text-gray-200">{yKey}</strong></div>
                 <div className="mt-2">Loss (MAE) at step {step + 1}: <strong>{lossNow ?? "-"}</strong></div>
                 <div>Δ Loss: <strong>{lossDelta != null ? `-${lossDelta}` : "-"}</strong></div>
                 <div>Accuracy: <strong>{accNow != null ? `${accNow}%` : "-"}</strong></div>
               </div>
+                  
+                  {/* Controls for previous-step visibility */}
+                  <div className="mt-4 border-t border-gray-700 pt-3">
+                    <h4 className="text-sm font-medium mb-2">Previous steps display</h4>
+                    <div className="text-xs text-gray-600 mb-2">Number of previous steps to show (0 = none)</div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(0, states.series.length - 1)}
+                      value={prevCount}
+                      onChange={(e) => setPrevCount(Number(e.target.value))}
+                      className="w-full"
+                    />
+                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                      <div className="flex-1">
+                        <div>Opacity</div>
+                        <input type="range" min={0.05} max={0.8} step={0.05} value={prevOpacity} onChange={(e) => setPrevOpacity(Number(e.target.value))} className="w-full" />
+                      </div>
+                      <div className="w-24">
+                        <div>Size</div>
+                        <input type="range" min={2} max={10} step={1} value={prevRadius} onChange={(e) => setPrevRadius(Number(e.target.value))} className="w-full" />
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-gray-400">Showing last <strong className="text-gray-200">{prevCount}</strong> previous steps with opacity <strong className="text-gray-200">{prevOpacity}</strong> and radius <strong className="text-gray-200">{prevRadius}</strong>.</div>
+                  </div>
             </div>
           </div>
 
-          <div className="md:col-span-2 bg-white rounded shadow p-4">
+          <div className="md:col-span-2 bg-gray-900 rounded-xl shadow-lg border border-gray-700 p-4">
             <div style={{ width: "100%", height: 420 }}>
               <ResponsiveContainer width="100%" height="60%">
                 <ScatterChart>
-                  <CartesianGrid />
-                  <XAxis dataKey="x" name={xKey} />
-                  <YAxis dataKey="y" name={yKey} />
+                  <CartesianGrid stroke="#374151" />
+                  <XAxis
+                    dataKey="x"
+                    name={xKey}
+                    stroke="#9ca3af"
+                    type="number"
+                    domain={axisDomains.x}
+                    tickFormatter={(v: any) => Number(v).toFixed(0)}
+                    label={{ value: xKey, position: "insideBottom", offset: -8, fill: "#9ca3af" }}
+                  />
+                  <YAxis
+                    dataKey="y"
+                    name={yKey}
+                    stroke="#9ca3af"
+                    type="number"
+                    domain={axisDomains.y}
+                    tickFormatter={(v: any) => Number(v).toFixed(0)}
+                    label={{ value: yKey, angle: -90, position: "insideLeft", offset: 0, fill: "#9ca3af" }}
+                  />
                   <Tooltip
                     cursor={{ strokeDasharray: "3 3" }}
                     formatter={(val: any, name: any, props: any) => scatterTooltipFormatter(val, name, props)}
                   />
                   <Legend />
-                  {/* faint previous points for context */}
+
+                  {/* Render all previous steps (faint) for richer context */}
+                  {states.series.map((s, si) => {
+                    // only render previous steps within the last `prevCount`
+                    if (si >= step) return null;
+                    const startIndex = Math.max(0, step - prevCount);
+                    if (si < startIndex) return null;
+                    return (
+                      <Scatter
+                        key={`prev-${si}`}
+                        name={`step ${si + 1} (prev)`}
+                        data={s.map((p) => ({ ...p, x: p.x, y: p.y }))}
+                        fill="#9CA3AF"
+                        opacity={prevOpacity}
+                        shape={(props: any) => {
+                          const { cx, cy } = props;
+                          return <circle cx={cx} cy={cy} r={prevRadius} fill="#9CA3AF" opacity={prevOpacity} stroke="#6B7280" strokeWidth={0.6} />;
+                        }}
+                      />
+                    );
+                  })}
+
+                  {/* Current correct points */}
                   <Scatter
-                    name="previous (faint)"
-                    data={displayPrev}
-                    fill="#9CA3AF"
-                    opacity={0.25}
-                    shape={(props: any) => {
-                      const { cx, cy, payload } = props;
-                      // faint background circle
-                      return <circle cx={cx} cy={cy} r={4} fill="#9CA3AF" opacity={0.25} />;
-                    }}
+                    name="Correct"
+                    data={displayCurrent.filter((p: any) => p.correct)}
+                    fill="#10B981"
+                    shape={(props: any) => <PointWithArrow {...props} forcedColor="#10B981" />}
                   />
 
-                  {/* current points with arrows */}
+                  {/* Current wrong points */}
                   <Scatter
-                    name="current"
-                    data={displayCurrent}
-                    shape={PointWithArrow}
+                    name="Wrong"
+                    data={displayCurrent.filter((p: any) => !p.correct)}
+                    fill="#EF4444"
+                    shape={(props: any) => <PointWithArrow {...props} forcedColor="#EF4444" />}
                   />
                 </ScatterChart>
               </ResponsiveContainer>
 
               <div className="mt-6">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Residual (Loss) trend</h4>
+                <h4 className="text-sm font-medium text-gray-300 mb-2">Residual (Loss) trend</h4>
                 <div style={{ width: "100%", height: 160 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={lossSeries}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="step" />
-                      <YAxis domain={[0, 'dataMax + 0.05']} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                      <XAxis dataKey="step" stroke="#9ca3af" />
+                      <YAxis domain={[0, 'dataMax + 0.05']} stroke="#9ca3af" />
                       <Tooltip />
                       <Line type="monotone" dataKey="loss" stroke="#16a34a" strokeWidth={3} dot />
                     </LineChart>
